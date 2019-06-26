@@ -6,16 +6,8 @@
 
 static const char *TAG = "i2c-master";
 
-#define DATA_LENGTH 512    /*!< Data buffer length of test buffer */
-#define RW_TEST_LENGTH 128 /*!< Data length for r/w test, [0,DATA_LENGTH] */
 #define DELAY_TIME_BETWEEN_ITEMS_MS \
   5000 /*!< delay time between different test items */
-
-#define I2C_SLAVE_SCL_IO GPIO_NUM_22
-#define I2C_SLAVE_SDA_IO GPIO_NUM_21
-#define I2C_SLAVE_NUM I2C_NUM_0
-#define I2C_SLAVE_TX_BUF_LEN (2 * DATA_LENGTH)
-#define I2C_SLAVE_RX_BUF_LEN (2 * DATA_LENGTH)
 
 #define I2C_MASTER_SDA_IO GPIO_NUM_18
 #define I2C_MASTER_SCL_IO GPIO_NUM_19
@@ -73,17 +65,6 @@ void i2c_scan(i2c_port_t port) {
   printf("\n");
 }
 
-/**
- * @brief test code to read esp-i2c-slave
- *        We need to fill the buffer of esp slave device, then master can read
- * them out.
- *
- * _______________________________________________________________________________________
- * | start | slave_addr + rd_bit +ack | read n-1 bytes + ack | read 1 byte +
- * nack | stop |
- * --------|--------------------------|----------------------|--------------------|------|
- *
- */
 static esp_err_t i2c_master_read_slave(i2c_port_t i2c_num, uint8_t *data_rd,
                                        size_t size) {
   if (size == 0) {
@@ -102,17 +83,6 @@ static esp_err_t i2c_master_read_slave(i2c_port_t i2c_num, uint8_t *data_rd,
   return ret;
 }
 
-/**
- * @brief Test code to write esp-i2c-slave
- *        Master device write data to slave(both esp32),
- *        the data will be stored in slave buffer.
- *        We can read them out from slave buffer.
- *
- * ___________________________________________________________________
- * | start | slave_addr + wr_bit + ack | write n bytes + ack  | stop |
- * --------|---------------------------|----------------------|------|
- *
- */
 static esp_err_t i2c_master_write_slave(i2c_port_t i2c_num, uint8_t *data_wr,
                                         size_t size) {
   i2c_cmd_handle_t cmd = i2c_cmd_link_create();
@@ -207,22 +177,7 @@ int slave_read_data(uint8_t *buff, uint16_t len) {
   return ret;
 }
 
-/**
- * @brief test function to show buffer
- */
-static void disp_buf(uint8_t *buf, int len) {
-  int i;
-  for (i = 0; i < len; i++) {
-    printf("%02x ", buf[i]);
-    if ((i + 1) % 16 == 0) {
-      printf("\n");
-    }
-  }
-  printf("\n");
-}
-
 static void i2c_test_task(void *arg) {
-  // uint32_t task_idx = (uint32_t)arg;
   uint8_t inBuff[32];
   uint16_t inLen;
   while (1) {
@@ -238,20 +193,16 @@ static void i2c_test_task(void *arg) {
     }
     vTaskDelay((DELAY_TIME_BETWEEN_ITEMS_MS) / portTICK_RATE_MS);
   }
-  // vSemaphoreDelete(print_mux);
   vTaskDelete(NULL);
 }
 
 static void i2c_sender(void *arg) {
-  // uint32_t task_idx = (uint32_t)arg;
   uint8_t outBuff[32];
-  uint16_t inLen;
   while (1) {
     memcpy(outBuff, testCmd, 10);
     i2c_master_write_slave(I2C_MASTER_NUM, outBuff, 10);
     vTaskDelay((2 * DELAY_TIME_BETWEEN_ITEMS_MS) / portTICK_RATE_MS);
   }
-  // vSemaphoreDelete(print_mux);
   vTaskDelete(NULL);
 }
 
