@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include <cstring>
 #include "driver/i2c.h"
 #include "esp_log.h"
 #include "sdkconfig.h"
@@ -8,7 +9,7 @@ static const char *TAG = "i2c-master";
 #define DATA_LENGTH 512    /*!< Data buffer length of test buffer */
 #define RW_TEST_LENGTH 128 /*!< Data length for r/w test, [0,DATA_LENGTH] */
 #define DELAY_TIME_BETWEEN_ITEMS_MS \
-  10000 /*!< delay time between different test items */
+  5000 /*!< delay time between different test items */
 
 #define I2C_SLAVE_SCL_IO GPIO_NUM_22
 #define I2C_SLAVE_SDA_IO GPIO_NUM_21
@@ -16,14 +17,15 @@ static const char *TAG = "i2c-master";
 #define I2C_SLAVE_TX_BUF_LEN (2 * DATA_LENGTH)
 #define I2C_SLAVE_RX_BUF_LEN (2 * DATA_LENGTH)
 
-#define I2C_MASTER_SCL_IO GPIO_NUM_19
 #define I2C_MASTER_SDA_IO GPIO_NUM_18
+#define I2C_MASTER_SCL_IO GPIO_NUM_19
+
 #define I2C_MASTER_NUM I2C_NUM_1
 #define I2C_MASTER_FREQ_HZ 100000
 #define I2C_MASTER_TX_BUF_DISABLE 0 /*!< I2C master doesn't need buffer */
 #define I2C_MASTER_RX_BUF_DISABLE 0 /*!< I2C master doesn't need buffer */
 
-#define ESP_SLAVE_ADDR 0x28
+#define ESP_SLAVE_ADDR 0x04
 #define WRITE_BIT I2C_MASTER_WRITE /*!< I2C master write */
 #define READ_BIT I2C_MASTER_READ   /*!< I2C master read */
 #define ACK_CHECK_EN 0x1           /*!< I2C master will check ack from slave*/
@@ -31,8 +33,44 @@ static const char *TAG = "i2c-master";
 #define ACK_VAL 0x0       /*!< I2C ack value */
 #define NACK_VAL 0x1      /*!< I2C nack value */
 
+const uint8_t testCmd[10] = {0x01, 0x02, 0x03, 0x04, 0x05,
+                             0x06, 0x07, 0x08, 0x09, 0x0A};
+
 extern "C" {
 void app_main(void);
+}
+
+esp_err_t i2c_probe(i2c_port_t port, uint8_t address) {
+  esp_err_t result;
+  i2c_cmd_handle_t cmd = i2c_cmd_link_create();
+  i2c_master_start(cmd);
+  i2c_master_write_byte(cmd, (address << 1) | I2C_MASTER_WRITE, ACK_CHECK_EN);
+  i2c_master_stop(cmd);
+  result = i2c_master_cmd_begin(port, cmd, 10 / portTICK_PERIOD_MS);
+  i2c_cmd_link_delete(cmd);
+  return result;
+}
+
+void i2c_scan(i2c_port_t port) {
+  ESP_LOGD(TAG, "Scanning I2C bus.");
+
+  uint8_t address;
+  esp_err_t result;
+  printf("     0  1  2  3  4  5  6  7  8  9  a  b  c  d  e  f\n");
+  printf("00:         ");
+  for (address = 3; address < 0x78; address++) {
+    result = i2c_probe(port, address);
+
+    if (address % 16 == 0) {
+      printf("\n%.2x:", address);
+    }
+    if (result == ESP_OK) {
+      printf(" %.2x", address);
+    } else {
+      printf(" --");
+    }
+  }
+  printf("\n");
 }
 
 /**
@@ -87,6 +125,32 @@ static esp_err_t i2c_master_write_slave(i2c_port_t i2c_num, uint8_t *data_wr,
   return ret;
 }
 
+int read_register(i2c_port_t i2c_num, uint16_t address, uint8_t regAdd,
+                  uint8_t *readBuff, uint16_t readBuffLen) {
+  if (readBuffLen == 0) {
+    return ESP_OK;
+  }
+  i2c_cmd_handle_t cmd = i2c_cmd_link_create();
+  i2c_master_start(cmd);
+  // first, send device address (indicating write) & register to be read
+  i2c_master_write_byte(cmd, (address << 1) | I2C_MASTER_WRITE, ACK_CHECK_EN);
+  // send register we want
+  i2c_master_write_byte(cmd, regAdd, ACK_CHECK_EN);
+  // Send repeated start
+  i2c_master_start(cmd);
+  // now send device address (indicating read) & read data
+  i2c_master_write_byte(cmd, (address << 1) | I2C_MASTER_READ, ACK_CHECK_EN);
+  if (readBuffLen > 1) {
+    i2c_master_read(cmd, readBuff, readBuffLen - 1, (i2c_ack_type_t)ACK_VAL);
+  }
+  i2c_master_read_byte(cmd, readBuff + readBuffLen - 1,
+                       (i2c_ack_type_t)NACK_VAL);
+  i2c_master_stop(cmd);
+  esp_err_t ret = i2c_master_cmd_begin(i2c_num, cmd, 1000 / portTICK_RATE_MS);
+  i2c_cmd_link_delete(cmd);
+  return ret;
+}
+
 /**
  * @brief i2c master initialization
  */
@@ -105,6 +169,44 @@ static esp_err_t i2c_master_init() {
                             I2C_MASTER_TX_BUF_DISABLE, 0);
 }
 
+uint16_t slave_data_avlble() {
+  uint8_t lenBuff[2];
+  // int ret = read_register(I2C_MASTER_NUM, ESP_SLAVE_ADDR, 0x01, lenBuff, 2);
+  uint8_t cmdBuff[1] = {0x01};
+  int ret = i2c_master_write_slave(I2C_MASTER_NUM, cmdBuff, 1);
+  if (ret != ESP_OK) {
+    ESP_LOGE(TAG, "error, slave_data_avlble write: %d", ret);
+    return 0;
+  }
+  vTaskDelay(pdMS_TO_TICKS(200));
+  ret = i2c_master_read_slave(I2C_MASTER_NUM, lenBuff, 2);
+  if (ret != ESP_OK) {
+    ESP_LOGE(TAG, "error, slave_data_avlble read: %d", ret);
+    return 0;
+  }
+  // ESP_LOG_BUFFER_HEX(TAG, lenBuff, 2);
+  uint16_t len = lenBuff[0] | (lenBuff[1] << 8);
+  ESP_LOGI(TAG, "data available: %d, ret: %d", len, ret);
+  return len;
+}
+
+int slave_read_data(uint8_t *buff, uint16_t len) {
+  uint8_t cmdBuff[1] = {0x02};
+  int ret = i2c_master_write_slave(I2C_MASTER_NUM, cmdBuff, 1);
+  if (ret != ESP_OK) {
+    ESP_LOGE(TAG, "error, slave_read_data write: %d", ret);
+    return 0;
+  }
+  vTaskDelay(pdMS_TO_TICKS(200));
+  ret = i2c_master_read_slave(I2C_MASTER_NUM, buff, len);
+  if (ret != ESP_OK) {
+    ESP_LOGE(TAG, "error, slave_read_data read: %d", ret);
+    return 0;
+  }
+  // int ret = read_register(I2C_MASTER_NUM, ESP_SLAVE_ADDR, 0x02, buff, len);
+  return ret;
+}
+
 /**
  * @brief test function to show buffer
  */
@@ -120,47 +222,34 @@ static void disp_buf(uint8_t *buf, int len) {
 }
 
 static void i2c_test_task(void *arg) {
-  int i = 0;
-  int ret;
-  uint32_t task_idx = (uint32_t)arg;
-
-  uint8_t *data_wr = (uint8_t *)malloc(DATA_LENGTH);
-  uint8_t *data_rd = (uint8_t *)malloc(DATA_LENGTH);
+  // uint32_t task_idx = (uint32_t)arg;
+  uint8_t inBuff[32];
+  uint16_t inLen;
   while (1) {
-    for (i = 0; i < DATA_LENGTH; i++) {
-      data_rd[i] = 0x00;
-    }
-    i2c_reset_rx_fifo(I2C_SLAVE_NUM);
-    ret = i2c_master_read_slave(I2C_MASTER_NUM, data_rd, RW_TEST_LENGTH);
-    if (ret == ESP_ERR_TIMEOUT) {
-      ESP_LOGE(TAG, "I2C Timeout");
-    } else if (ret == ESP_OK) {
-      printf("====TASK[%d] Master read %d ====\n", task_idx, RW_TEST_LENGTH);
-      disp_buf(data_rd, RW_TEST_LENGTH);
-    } else {
-      ESP_LOGW(TAG,
-               "TASK[%d] %s: Master read slave error, IO not connected...\n",
-               task_idx, esp_err_to_name(ret));
+    inLen = slave_data_avlble();
+    if (inLen > 0) {
+      if (inLen > 32) {
+        ESP_LOGE(TAG, "in len too big: %d", inLen);
+      } else {
+        slave_read_data(inBuff, inLen);
+        ESP_LOGI(TAG, "got data: %d", inLen);
+        ESP_LOG_BUFFER_HEX(TAG, inBuff, inLen);
+      }
     }
     vTaskDelay((DELAY_TIME_BETWEEN_ITEMS_MS) / portTICK_RATE_MS);
-    //---------------------------------------------------
-    for (i = 0; i < DATA_LENGTH; i++) {
-      data_wr[i] = i + 10;
-    }
-    // we need to fill the slave buffer so that master can read later
-    ret = i2c_master_write_slave(I2C_MASTER_NUM, data_wr, RW_TEST_LENGTH);
-    if (ret == ESP_ERR_TIMEOUT) {
-      ESP_LOGE(TAG, "I2C Timeout");
-    } else if (ret == ESP_OK) {
-      printf("----TASK[%d] Master write %d ----\n", task_idx, RW_TEST_LENGTH);
-      disp_buf(data_wr, RW_TEST_LENGTH);
+  }
+  // vSemaphoreDelete(print_mux);
+  vTaskDelete(NULL);
+}
 
-    } else {
-      ESP_LOGW(TAG,
-               "TASK[%d] %s: Master write slave error, IO not connected....\n",
-               task_idx, esp_err_to_name(ret));
-    }
-    vTaskDelay((DELAY_TIME_BETWEEN_ITEMS_MS) / portTICK_RATE_MS);
+static void i2c_sender(void *arg) {
+  // uint32_t task_idx = (uint32_t)arg;
+  uint8_t outBuff[32];
+  uint16_t inLen;
+  while (1) {
+    memcpy(outBuff, testCmd, 10);
+    i2c_master_write_slave(I2C_MASTER_NUM, outBuff, 10);
+    vTaskDelay((2 * DELAY_TIME_BETWEEN_ITEMS_MS) / portTICK_RATE_MS);
   }
   // vSemaphoreDelete(print_mux);
   vTaskDelete(NULL);
@@ -170,5 +259,9 @@ void app_main() {
   ESP_LOGI(TAG, "MASTER--------------------------------");
   ESP_ERROR_CHECK(i2c_master_init());
 
+  i2c_scan(I2C_MASTER_NUM);
+
   xTaskCreate(i2c_test_task, "master", 1024 * 2, (void *)0, 10, NULL);
+  vTaskDelay(pdMS_TO_TICKS(2500));
+  xTaskCreate(i2c_sender, "sender", 1024 * 2, (void *)0, 10, NULL);
 }
