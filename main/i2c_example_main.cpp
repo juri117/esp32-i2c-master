@@ -25,6 +25,8 @@ static const char *TAG = "i2c-master";
 #define ACK_VAL 0x0       /*!< I2C ack value */
 #define NACK_VAL 0x1      /*!< I2C nack value */
 
+#define SLAVE_REQUEST_WAIT_MS 80
+
 const uint8_t testCmd[10] = {0x01, 0x02, 0x03, 0x04, 0x05,
                              0x06, 0x07, 0x08, 0x09, 0x0A};
 
@@ -148,7 +150,7 @@ uint16_t slave_data_avlble() {
     ESP_LOGE(TAG, "error, slave_data_avlble write: %d", ret);
     return 0;
   }
-  vTaskDelay(pdMS_TO_TICKS(200));
+  vTaskDelay(pdMS_TO_TICKS(SLAVE_REQUEST_WAIT_MS));
   ret = i2c_master_read_slave(I2C_MASTER_NUM, lenBuff, 2);
   if (ret != ESP_OK) {
     ESP_LOGE(TAG, "error, slave_data_avlble read: %d", ret);
@@ -167,7 +169,7 @@ int slave_read_data(uint8_t *buff, uint16_t len) {
     ESP_LOGE(TAG, "error, slave_read_data write: %d", ret);
     return 0;
   }
-  vTaskDelay(pdMS_TO_TICKS(200));
+  vTaskDelay(pdMS_TO_TICKS(SLAVE_REQUEST_WAIT_MS));
   ret = i2c_master_read_slave(I2C_MASTER_NUM, buff, len);
   if (ret != ESP_OK) {
     ESP_LOGE(TAG, "error, slave_read_data read: %d", ret);
@@ -197,10 +199,14 @@ static void i2c_test_task(void *arg) {
 }
 
 static void i2c_sender(void *arg) {
-  uint8_t outBuff[32];
+  uint8_t outBuff[64];
+  for (size_t i = 0; i < 64; i++) {
+    outBuff[i] = i + 1;
+  }
+
   while (1) {
-    memcpy(outBuff, testCmd, 10);
-    i2c_master_write_slave(I2C_MASTER_NUM, outBuff, 10);
+    // memcpy(outBuff, testCmd, 10);
+    i2c_master_write_slave(I2C_MASTER_NUM, outBuff, 64);
     vTaskDelay((2 * DELAY_TIME_BETWEEN_ITEMS_MS) / portTICK_RATE_MS);
   }
   vTaskDelete(NULL);
