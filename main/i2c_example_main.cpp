@@ -7,10 +7,10 @@
 static const char *TAG = "i2c-master";
 
 #define DELAY_TIME_BETWEEN_ITEMS_MS \
-  5000 /*!< delay time between different test items */
+  200 /*!< delay time between different test items */
 
-#define I2C_MASTER_SDA_IO GPIO_NUM_18
-#define I2C_MASTER_SCL_IO GPIO_NUM_19
+#define I2C_MASTER_SDA_IO GPIO_NUM_21
+#define I2C_MASTER_SCL_IO GPIO_NUM_22
 
 #define I2C_MASTER_NUM I2C_NUM_1
 #define I2C_MASTER_FREQ_HZ 100000
@@ -25,10 +25,13 @@ static const char *TAG = "i2c-master";
 #define ACK_VAL 0x0       /*!< I2C ack value */
 #define NACK_VAL 0x1      /*!< I2C nack value */
 
-#define SLAVE_REQUEST_WAIT_MS 80
+#define SLAVE_REQUEST_WAIT_MS 100
 
 const uint8_t testCmd[10] = {0x01, 0x02, 0x03, 0x04, 0x05,
                              0x06, 0x07, 0x08, 0x09, 0x0A};
+
+uint8_t outBuff[64];
+uint16_t outBuffLen = 0;
 
 extern "C" {
 void app_main(void);
@@ -179,11 +182,25 @@ int slave_read_data(uint8_t *buff, uint16_t len) {
   return ret;
 }
 
+int send_out_buff() {
+  if (outBuffLen > 0) {
+    uint8_t writeBuff[outBuffLen + 1];
+    writeBuff[0] = outBuffLen;
+    memcpy(writeBuff + 1, outBuff, outBuffLen);
+    i2c_master_write_slave(I2C_MASTER_NUM, writeBuff, 1 + outBuffLen);
+    ESP_LOGI(TAG, "sent %d bytes", outBuffLen);
+    outBuffLen = 0;
+    vTaskDelay(pdMS_TO_TICKS(100));
+    return 1;
+  }
+  return 0;
+}
+
 static void i2c_test_task(void *arg) {
   uint8_t inBuff[32];
-  uint16_t inLen;
   while (1) {
-    inLen = slave_data_avlble();
+    send_out_buff();
+    uint16_t inLen = slave_data_avlble();
     if (inLen > 0) {
       if (inLen > 32) {
         ESP_LOGE(TAG, "in len too big: %d", inLen);
@@ -199,15 +216,15 @@ static void i2c_test_task(void *arg) {
 }
 
 static void i2c_sender(void *arg) {
-  uint8_t outBuff[64];
   for (size_t i = 0; i < 64; i++) {
     outBuff[i] = i + 1;
   }
 
   while (1) {
     // memcpy(outBuff, testCmd, 10);
-    i2c_master_write_slave(I2C_MASTER_NUM, outBuff, 64);
-    vTaskDelay((2 * DELAY_TIME_BETWEEN_ITEMS_MS) / portTICK_RATE_MS);
+
+    outBuffLen = 64;
+    vTaskDelay((3 * DELAY_TIME_BETWEEN_ITEMS_MS) / portTICK_RATE_MS);
   }
   vTaskDelete(NULL);
 }
